@@ -25,6 +25,7 @@
 #define PARK_SIZE 16  // Default capacity of the parking space (minimum)
 #define PARK_LIMIT 40 // Maximum capacity of the parking space (maximum)
 #define EXP_CARS 5E-2 // Default expected number of in-comming cars
+#define TOTAL_CARS_IMAGE 13
 
 #define READY 1 // state of valet ready for serving cars
 #define MOVE 2	// state of valet busy un/parking a car
