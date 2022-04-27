@@ -80,6 +80,8 @@ int main(int argc, char *argv[]) {
 	//Locks initialization
 	pthread_mutex_init(&lock, NULL);
 	pthread_mutex_init(&queue_opr_mutex, NULL);
+	sem_init(&inVal_sem, 0, 0);
+	sem_init(&outVal_sem, 0, 0);
 
 	//Initialize the car park
 	Car **p = (Car**)malloc(psize * sizeof(Car*));
@@ -119,7 +121,9 @@ int main(int argc, char *argv[]) {
 				break;
 			}
 			else {
+				//Enqueue the car and increment the invalet semaphore
 				Qenqueue(car);
+				sem_post(&inVal_sem);
 			}
 			printCar(Qpeek());
 			pthread_mutex_unlock(&queue_opr_mutex);
