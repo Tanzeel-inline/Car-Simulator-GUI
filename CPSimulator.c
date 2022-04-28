@@ -11,7 +11,7 @@
 
 //Global variables
 int car_id = 0;
-int psize = 10, inval = 3, outval = 2, qsize = 8;
+int psize = 16, inval = 3, outval = 2, qsize = 8;
 float expnum = 1.50;
 long timer = 0;
 
@@ -19,9 +19,9 @@ int total_cars = 0;
 int refused_cars = 0;
 int allowed_cars = 0;
 int occupied_slots = 0;
-
-float sum_waiting_time = 0;
-float sum_car_parking = 0;
+int cars_acquired_by_invalet = 0;
+long sum_waiting_time = 0;
+long sum_car_parking = 0;
 int waiting_car_count = 0;
 int car_parking_count = 0;
 
@@ -45,6 +45,7 @@ int tail_val = 0;
 //Threads variable
 pthread_t *inValThreads;
 pthread_t *outValThreads;
+pthread_t mon;
 
 //Valet id's
 int *inValsID;
@@ -55,12 +56,34 @@ int *outValsID;
 time_t start_simulation;
 time_t stop_simulation;
 
+
+//OutValet queue store
+Car **outValetStore;
+int OVSHead = 0;
+int OVSTail = 0;
+int OVSCount = 0;
+
+char *getTime() {
+	time_t tempTime;
+	time(&tempTime);
+	char *time_str = ctime(&tempTime);
+	time_str[strlen(time_str) - 1] = '\0';
+	return time_str;
+}
+
+long getCurrentTime() {
+	time_t tempTime;
+	time(&tempTime);
+
+	return tempTime;
+}
+
 void Car_Init(Car *p) {
 	p->cid = car_id++;
 	p->vid = (rand() % inval) + 1;
 	p->sno = (rand() % psize);
-	p->atm = timer;
-	p->ltm = 5;
+	p->atm = getCurrentTime();
+	p->ltm = 20;
 	sprintf(p->pn, ".cars/Car%d.bmp", p->cid);
 	sprintf(p->pnf, ".cars/Car%df.bmp", p->cid);
 	car_id = car_id % TOTAL_CARS_IMAGE; 
@@ -70,13 +93,6 @@ void printCar(Car *p) {
 	printf("Car %d: %d %d %ld %ld %s %s\n", p->cid, p->vid, p->sno, p->atm, p->ltm, p->pn, p->pnf);
 }
 
-char *getTime() {
-	time_t tempTime;
-	time(&tempTime);
-	char *time_str = ctime(&tempTime);
-	time_str[strlen(time_str) - 1] = '\0';
-	return time_str;
-}
 void ctrlCHandle(int sig) {
 
 	time(&stop_simulation);
@@ -127,19 +143,19 @@ void ctrlCHandle(int sig) {
 	}
 	free(p);
 	
-	printf("CP Simulation was executed for:\t%ld\n",timer);
+	printf("CP Simulation was executed for:\t%ld\n",stop_simulation - start_simulation);
 	printf("Total number of car processed:\t%d\n", allowed_cars);
 	printf("  Number of car that parked:\t%d\n", waiting_car_count);
 	printf("  Number of car that turned away:\t%d\n", refused_cars);
-	printf("  Number of car in transit\t%d\n", 1);
+	printf("  Number of car in transit\t%d\n", OVSCount);
 	printf("  Number of cars still queued:\t%d\n",Qsize());
 	printf("  Number of cars still parked:\t%d\n\n\n",psize);
 
-	printf("Average queue waiting time:\t%f\n", sum_waiting_time / waiting_car_count);
-	printf("Average parking time:\t%f\n\n\n", sum_car_parking / car_parking_count);
+	printf("Average queue waiting time:\t%.2f\n", sum_waiting_time * 1.0 / waiting_car_count );
+	printf("Average parking time:\t%.2f\n\n\n", sum_car_parking * 1.0 / car_parking_count );
 
 	printf("%s:\tCarpark exits.\n", getTime());
-	finish();
+	//finish();
 	exit(0);
 }
 
@@ -170,6 +186,7 @@ void *inValet(void *arg) {
 		else {
 			printf("Invalet %d: Fetching car from queue\n", id);
 			car = Qserve();
+			cars_acquired_by_invalet++;
 			//setViState(id, WAIT);
 			//setViCar(id, car);
 		}
@@ -189,11 +206,14 @@ void *inValet(void *arg) {
 			//Sleep before parking the car
 			sleep(1);
 			p[tail_val] = car;
-			p[tail_val]->ptm = timer;
+			p[tail_val]->ptm = getCurrentTime();
+			p[tail_val]->sno = tail_val;
 			sum_waiting_time += (p[tail_val]->ptm - p[tail_val]->atm);
 			waiting_car_count++;
 			tail_val++;
 			car_counter++;
+			cars_acquired_by_invalet--;
+			car->vid = id;
 			//setViState(id, MOVE);
 			//Sleep after parking the car
 			sleep(1);
@@ -211,14 +231,13 @@ void *outValet(void *arg) {
 	//int id = 1;
 	while ( true ) {
 		Car *car;
-		//Valet is ready to serve the car
 		//setVoState(id, READY);
 		sem_wait(&outVal_sem);
 		//Valet is waiting to access park space, to unpark the car
 		//setVoState(id, WAIT);
 		pthread_mutex_lock(&parking_opr_mutex);
 		//There is no car in the parking lot, so valet is going back to ready state
-		if ( car_counter == 0 ) {
+		if ( OVSCount == 0 ) {
 			SleepFloat(0.2);
 			pthread_mutex_unlock(&parking_opr_mutex);
 			continue;
@@ -228,25 +247,11 @@ void *outValet(void *arg) {
 			//setVoState(id, MOVE);
 			//setVoCar(id, car);
 			//Looking for car that is ready to be unparked
-			for ( int i = 0 ; i < tail_val ; i++ ) {
-				if ( p[i]->ptm + p[i]->ltm <= timer ) {
-					printf("Outvalet %d: Unparking car\n", id);
-					//Sleeping before unparking a car
-					sleep(1);
-					car = p[i];
-					//Remove the car from parking lot
-					for ( int j = i ; j < tail_val - 1 ; j++ ) {
-						p[j] = p[j+1];
-					}
-					tail_val--;
-					car_counter--;
-					sum_car_parking += (car->ltm - car->ptm);
-					car_parking_count++;
-					sem_post(&inVal_parking_sem);
-					//Sleeping after unparking a car
-					sleep(1);
-				}
-			}
+			sleep(1);
+			car = outValetStore[OVSHead];
+			OVSHead++;
+			OVSCount--;
+			sleep(1);
 		}
 		//Sleep for 0.2s before exiting critical section
 		SleepFloat(0.2);
@@ -259,9 +264,16 @@ void *outValet(void *arg) {
 
 void *monitor(void *arg) {
 
+	while ( true ) {
+		updateStats(tail_val, total_cars, allowed_cars, refused_cars, cars_acquired_by_invalet, sum_waiting_time, sum_car_parking, (tail_val * 100.0) / psize);
+		show();
+		sleep(1);	
+	}
 	//updateStats()
 	return NULL;
 }
+
+
 int main(int argc, char *argv[]) {
 	//Random seed
 	srand(time(NULL));
@@ -317,6 +329,13 @@ int main(int argc, char *argv[]) {
 	//Initialize the car queue
 	Qinit(qsize);
 
+	//Queue for outvalet
+	outValetStore = (Car**)malloc(outval * sizeof(Car*));
+	for ( int i = 0 ; i < outval ; i++ ) {
+		outValetStore[i] = NULL;
+	}
+
+	//Thread creation
 	for ( int i = 0 ; i < inval ; i++ ) {
 		printf("[MAIN]:InValet thread %d created\n", i);
 		inValsID[i] = i + 1;
@@ -329,16 +348,19 @@ int main(int argc, char *argv[]) {
 		pthread_create(&outValThreads[i], NULL, outValet,&outValsID[i]);
 	}
 
+
 	//Initializing the car display
 	G2DInit(p, psize, inval, outval, lock);
 	show();
 
-
+	pthread_create(&mon, NULL, monitor, NULL);
 	//Infinite main thread loop
 	while ( true ) {
 		//Poisson distribution
 		int carsToSpawn = newCars(expnum);
 		printf("[MAIN]:%d cars to spawn\n", carsToSpawn);
+
+		//This part deals with inValet operations
 		//If there is space in the queue, spawn cars
 		int i = 0;
 		for ( ; i < carsToSpawn ; i++ ) {
@@ -370,17 +392,33 @@ int main(int argc, char *argv[]) {
 			pthread_mutex_unlock(&queue_opr_mutex);
 		}
 
+		//This part deals with outValet operation
 		pthread_mutex_lock(&parking_opr_mutex);
-		//printf("[MAIN]:Parking locked gained by Main thread\n");
+		long currTime = getCurrentTime();
 		for ( int i = 0 ; i < tail_val ; i++ ) {
-			//printf("%ld - %ld\n",p[i]->ptm + p[i]->ltm , timer);
-			if ( p[i]->ptm + p[i]->ltm == timer ) {
-				printf("[MAIN]:Car %d ready to be removed\n", i);
-				//Tell the out valet that some car is ready to be unparked
+			//No space in queue of outvalet
+			if ( OVSCount >= outval ) {
+				break;
+			}
+			printf("%ld - %ld\n", p[i]->ptm + p[i]->ltm, currTime);
+			if ( p[i]->ptm + p[i]->ltm <= currTime ) {
+				outValetStore[OVSTail] = p[i];
+				sum_car_parking += (outValetStore[OVSTail]->ltm);
+				OVSTail = (OVSTail + 1) % outval;
+				OVSCount++;
+				
+				for ( int j = i ; j < tail_val - 1 ; j++ ) {
+					p[j] = p[j+1];
+				}
+				p[tail_val - 1] = NULL;
+				tail_val--;
+				car_counter--;
+				car_parking_count++;
+
+				sem_post(&inVal_parking_sem);
 				sem_post(&outVal_sem);
 			}
 		}
-		//printf("[MAIN]:Parking locked released by Main thread\n");
 		pthread_mutex_unlock(&parking_opr_mutex);
 		//Sleep for 1 second
 		sleep(1);
@@ -388,13 +426,5 @@ int main(int argc, char *argv[]) {
 		timer++;
 		printf("[MAIN]:Parking lot slots occupied: %d\n", tail_val);
 	}
-	// updateStats(psize, psize, 10, 1, 3, 10, 10, 100);
-	// show();
-	// sleep(4);
-	// updateStats(psize, psize, 10, 1, 3, 20, 20, 100);
-	// show();
-	// sleep(4);
-	// finish();
-	//updateStats()
 	return 0;
 }
