@@ -10,12 +10,16 @@
 
 //Global variables
 int car_id = 0;
-int psize = 40, inval = 3, outval = 2, qsize = 8, expnum = 1.50;
+int psize = 10, inval = 3, outval = 2, qsize = 8, expnum = 1.50;
 long timer = 0;
 
+int total_cars = 0;
 int refused_cars = 0;
 int allowed_cars = 0;
 int occupied_slots = 0;
+
+int sum_waiting_time = 0;
+int sum_car_parking = 0;
 
 //Deadlock and starvation operations
 pthread_mutex_t queue_opr_mutex;
@@ -36,6 +40,10 @@ int tail_val = 0;
 //Threads variable
 pthread_t *inValThreads;
 pthread_t *outValThreads;
+
+//Valet id's
+int *inValsID;
+int *outValsID;
 
 
 void Car_Init(Car *p) {
@@ -69,6 +77,18 @@ void ctrlCHandle(int sig) {
 	pthread_mutex_destroy(&queue_opr_mutex);
 	pthread_mutex_destroy(&parking_opr_mutex);
 
+
+	free(inValThreads);
+	free(outValThreads);
+	free(inValsID);
+	free(outValsID);
+	//Qfree(q);
+
+	for ( int i = 0 ; i < car_counter; i++ ) {
+		free(p[i]);
+	}
+	free(p);
+	
 	finish();
 	exit(0);
 }
@@ -82,36 +102,52 @@ void SleepFloat(float sec) {
 
 void *inValet(void *arg) {
 
+	int id = *(int *)arg;
+	//int id = 1;
+	printf("Invalet loop %d\n", id);
 	while ( true ) {
-		//One will wait for queue addition
+		
+		Car *car;
+		//setViState(id, READY);
 		sem_wait(&inVal_sem);
-		printf("[INVALET]: Car added in queue, inValet signalled\n");
-		//One will wait for parking empty space
-		sem_wait(&inVal_parking_sem);
-		printf("[INVALET]: Space availible in parking, inValet signalled\n");
+		//setViState(id, FETCH);
 		pthread_mutex_lock(&queue_opr_mutex);
-		printf("[INVALET]: Queue locked gained by inValet\n");
-		int sem_space;
-		sem_getvalue(&inVal_parking_sem, &sem_space);
-		printf("[INVALET]: Parking Space left: %d\n",sem_space);
 		if ( QisEmpty() ) {
-			//Since, we have no car to park
-			sem_post(&inVal_parking_sem);
+			SleepFloat(0.2);
+			pthread_mutex_unlock(&queue_opr_mutex);
+			continue;
 		}
 		else {
-			//Pick the car, wait for .2 seconds
-			Car *holder = Qserve();
-			printf("[INVALET]: Car %d picked from queue with size %d, inValet signalled\n", holder->cid, Qsize());
-			//Send the car to parking lot
-			p[tail_val] = holder;
+			printf("Invalet %d: Fetching car from queue\n", id);
+			car = Qserve();
+			//setViState(id, WAIT);
+			//setViCar(id, car);
+		}
+		SleepFloat(0.2);
+		pthread_mutex_unlock(&queue_opr_mutex);
+
+		sem_wait(&inVal_parking_sem);
+
+		pthread_mutex_lock(&parking_opr_mutex);
+		if ( car_counter == psize ) {
+			SleepFloat(0.2);
+			pthread_mutex_unlock(&parking_opr_mutex);
+			continue;
+		}
+		else {
+			printf("Invalet %d: Parking car\n", id);
+			//Sleep before parking the car
+			sleep(1);
+			p[tail_val] = car;
 			p[tail_val]->ptm = timer;
 			tail_val++;
 			car_counter++;
-			//sleep(0.2);
-			SleepFloat(0.2);
+			//setViState(id, MOVE);
+			//Sleep after parking the car
+			sleep(1);
 		}
-		printf("[INVALET]: Queue locked released by inValet\n");
-		pthread_mutex_unlock(&queue_opr_mutex);
+		SleepFloat(0.2);
+		pthread_mutex_unlock(&parking_opr_mutex);
 	}
 	
 	return NULL;
@@ -119,30 +155,49 @@ void *inValet(void *arg) {
 
 void *outValet(void *arg) {
 
+	int id = *(int *)arg;
+	//int id = 1;
 	while ( true ) {
+		Car *car;
+		//Valet is ready to serve the car
+		//setVoState(id, READY);
 		sem_wait(&outVal_sem);
-
+		//Valet is waiting to access park space, to unpark the car
+		//setVoState(id, WAIT);
 		pthread_mutex_lock(&parking_opr_mutex);
-		printf("[OUTNVALET]:Parking lot locked gained by outValet\n");
-		printf("------------\n");
-		for ( int i = 0 ; i < tail_val ; i++ ) {
-			if ( p[i]->ptm + p[i]->ltm <= timer ) {
-				Car *outValHolder = p[i];
-				printf("[OUTNVALET]:Car %d outValeted\n", outValHolder->cid);
-				//Remove the car from parking lot
-				for ( int j = i ; j < tail_val - 1 ; j++ ) {
-					p[j] = p[j+1];
+		//There is no car in the parking lot, so valet is going back to ready state
+		if ( car_counter == 0 ) {
+			SleepFloat(0.2);
+			pthread_mutex_unlock(&parking_opr_mutex);
+			continue;
+		}
+		else {
+			//Valet is going to serve the car
+			//setVoState(id, MOVE);
+			//setVoCar(id, car);
+			//Looking for car that is ready to be unparked
+			for ( int i = 0 ; i < tail_val ; i++ ) {
+				if ( p[i]->ptm + p[i]->ltm <= timer ) {
+					printf("Outvalet %d: Unparking car\n", id);
+					//Sleeping before unparking a car
+					sleep(1);
+					car = p[i];
+					//Remove the car from parking lot
+					for ( int j = i ; j < tail_val - 1 ; j++ ) {
+						p[j] = p[j+1];
+					}
+					tail_val--;
+					car_counter--;
+					sem_post(&inVal_parking_sem);
+					//Sleeping after unparking a car
+					sleep(1);
 				}
-				tail_val--;
-				car_counter--;
-				sem_post(&inVal_parking_sem);
-				//sleep(0.2)
-				SleepFloat(0.2);
 			}
 		}
-		printf("[OUTNVALET]:------------\n");
-		printf("[OUTNVALET]:Parking lot locked released by outValet\n");
+		//Sleep for 0.2s before exiting critical section
+		SleepFloat(0.2);
 		pthread_mutex_unlock(&parking_opr_mutex);
+		
 	}
 	
 	return NULL;
@@ -191,6 +246,8 @@ int main(int argc, char *argv[]) {
 	//Initialize the threads variable
 	inValThreads = (pthread_t *) malloc(sizeof(pthread_t) * inval);
 	outValThreads = (pthread_t *) malloc(sizeof(pthread_t) * outval);
+	inValsID = (int *) malloc(sizeof(int) * inval);
+	outValsID = (int *) malloc(sizeof(int) * outval);
 
 	//Initialize the car park
 	p = (Car**)malloc(psize * sizeof(Car*));
@@ -204,11 +261,14 @@ int main(int argc, char *argv[]) {
 
 	for ( int i = 0 ; i < inval ; i++ ) {
 		printf("[MAIN]:InValet thread %d created\n", i);
-		pthread_create(&inValThreads[i], NULL, inValet, NULL);
+		inValsID[i] = i + 1;
+		pthread_create(&inValThreads[i], NULL, inValet,&inValsID[i]);
 	}
 
 	for ( int i = 0 ; i < outval ; i++ ) {
-		pthread_create(&outValThreads[i], NULL, outValet, NULL);
+		printf("[MAIN]:OutValet thread %d created\n", i);
+		outValsID[i] = i + 1;
+		pthread_create(&outValThreads[i], NULL, outValet,&outValsID[i]);
 	}
 
 
@@ -222,10 +282,11 @@ int main(int argc, char *argv[]) {
 		for ( ; i < carsToSpawn ; i++ ) {
 			//printCar(car);
 			pthread_mutex_lock(&queue_opr_mutex);
-			printf("[MAIN]:Queue locked gained by Main thread\n");
+			total_cars += carsToSpawn;
+			//printf("[MAIN]:Queue locked gained by Main thread\n");
 			if ( QisFull() ) {
 				printf("[MAIN]:Queue is full\n");
-				printf("[MAIN]:Queue locked released by Main thread\n");
+				//printf("[MAIN]:Queue locked released by Main thread\n");
 				refused_cars += (carsToSpawn - i);
 				pthread_mutex_unlock(&queue_opr_mutex);
 				break;
@@ -242,28 +303,28 @@ int main(int argc, char *argv[]) {
 			}
 			printCar(Qpeek());
 			printf("[MAIN]:Qsize is : %d\n", Qsize());
-			printf("[MAIN]:Queue locked released by Main thread\n");
+			//printf("[MAIN]:Queue locked released by Main thread\n");
 			allowed_cars++;
 			pthread_mutex_unlock(&queue_opr_mutex);
 		}
 
 		pthread_mutex_lock(&parking_opr_mutex);
-		printf("[MAIN]:Parking locked gained by Main thread\n");
+		//printf("[MAIN]:Parking locked gained by Main thread\n");
 		for ( int i = 0 ; i < tail_val ; i++ ) {
-			printf("%ld - %ld\n",p[i]->ptm + p[i]->ltm , timer);
+			//printf("%ld - %ld\n",p[i]->ptm + p[i]->ltm , timer);
 			if ( p[i]->ptm + p[i]->ltm == timer ) {
-				printf("[MAIN]:Car ready to be removed\n");
+				printf("[MAIN]:Car %d ready to be removed\n", i);
 				//Tell the out valet that some car is ready to be unparked
 				sem_post(&outVal_sem);
 			}
 		}
-		printf("[MAIN]:Parking locked released by Main thread\n");
+		//printf("[MAIN]:Parking locked released by Main thread\n");
 		pthread_mutex_unlock(&parking_opr_mutex);
 		//Sleep for 1 second
 		sleep(1);
 		//Our timer
 		timer++;
-		printf("[MAIN]:Parking lot: %d\n", tail_val);
+		printf("[MAIN]:Parking lot slots occupied: %d\n", tail_val);
 	}
 	// updateStats(psize, psize, 10, 1, 3, 10, 10, 100);
 	// show();
@@ -272,5 +333,6 @@ int main(int argc, char *argv[]) {
 	// show();
 	// sleep(4);
 	// finish();
+	//updateStats()
 	return 0;
 }
