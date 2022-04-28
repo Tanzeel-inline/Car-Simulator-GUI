@@ -6,11 +6,13 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <signal.h>
+#include <string.h>
 
 
 //Global variables
 int car_id = 0;
-int psize = 10, inval = 3, outval = 2, qsize = 8, expnum = 1.50;
+int psize = 10, inval = 3, outval = 2, qsize = 8;
+float expnum = 1.50;
 long timer = 0;
 
 int total_cars = 0;
@@ -18,8 +20,11 @@ int refused_cars = 0;
 int allowed_cars = 0;
 int occupied_slots = 0;
 
-int sum_waiting_time = 0;
-int sum_car_parking = 0;
+float sum_waiting_time = 0;
+float sum_car_parking = 0;
+int waiting_car_count = 0;
+int car_parking_count = 0;
+
 
 //Deadlock and starvation operations
 pthread_mutex_t queue_opr_mutex;
@@ -46,6 +51,10 @@ int *inValsID;
 int *outValsID;
 
 
+//Time variables
+time_t start_simulation;
+time_t stop_simulation;
+
 void Car_Init(Car *p) {
 	p->cid = car_id++;
 	p->vid = (rand() % inval) + 1;
@@ -61,8 +70,20 @@ void printCar(Car *p) {
 	printf("Car %d: %d %d %ld %ld %s %s\n", p->cid, p->vid, p->sno, p->atm, p->ltm, p->pn, p->pnf);
 }
 
+char *getTime() {
+	time_t tempTime;
+	time(&tempTime);
+	char *time_str = ctime(&tempTime);
+	time_str[strlen(time_str) - 1] = '\0';
+	return time_str;
+}
 void ctrlCHandle(int sig) {
 
+	time(&stop_simulation);
+
+	printf("\n\n\n%s:\tRecevied shutdown signal\n", getTime());
+	printf("%s:\tCar park valet is shutting down\n", getTime());
+	printf("%s:\tThe valets are leaving\n", getTime());
 	for ( int i = 0 ; i < inval; i++ ) {
 		pthread_cancel(inValThreads[i]);
 	}	
@@ -71,13 +92,30 @@ void ctrlCHandle(int sig) {
 		pthread_cancel(outValThreads[i]);
 	}
 
+	printf("%s:\tDone. %d valets left.\n", getTime(), inval + outval);
+
+	//finish();
+
+	printf("%s:\tMonitor exiting\n\n\n", getTime());
+
+
 	sem_destroy(&inVal_sem);
 	sem_destroy(&outVal_sem);
 	sem_destroy(&inVal_parking_sem);
 	pthread_mutex_destroy(&queue_opr_mutex);
 	pthread_mutex_destroy(&parking_opr_mutex);
 
-
+	char *time_str = ctime(&start_simulation);
+	time_str[strlen(time_str) - 1] = '\0';
+	printf("Simulator started at:\t%s\n", time_str);
+	printf(" Parking capacity was:\t%d\n", psize);
+	printf(" Allowed queue length was:\t%d\n", Qcapacity());
+	printf(" Number of in valets was:\t%d\n", inval);
+	printf(" Number of out valets was:\t%d\n", outval);
+	printf(" Expected arrivals was:\t%.2f\n", expnum);
+	time_str = ctime(&stop_simulation);
+	time_str[strlen(time_str) - 1] = '\0';
+	printf("Simulator stopped at:\t%s\n\n\n", time_str);
 	free(inValThreads);
 	free(outValThreads);
 	free(inValsID);
@@ -89,6 +127,18 @@ void ctrlCHandle(int sig) {
 	}
 	free(p);
 	
+	printf("CP Simulation was executed for:\t%ld\n",timer);
+	printf("Total number of car processed:\t%d\n", allowed_cars);
+	printf("  Number of car that parked:\t%d\n", waiting_car_count);
+	printf("  Number of car that turned away:\t%d\n", refused_cars);
+	printf("  Number of car in transit\t%d\n", 1);
+	printf("  Number of cars still queued:\t%d\n",Qsize());
+	printf("  Number of cars still parked:\t%d\n\n\n",psize);
+
+	printf("Average queue waiting time:\t%f\n", sum_waiting_time / waiting_car_count);
+	printf("Average parking time:\t%f\n\n\n", sum_car_parking / car_parking_count);
+
+	printf("%s:\tCarpark exits.\n", getTime());
 	finish();
 	exit(0);
 }
@@ -140,6 +190,8 @@ void *inValet(void *arg) {
 			sleep(1);
 			p[tail_val] = car;
 			p[tail_val]->ptm = timer;
+			sum_waiting_time += (p[tail_val]->ptm - p[tail_val]->atm);
+			waiting_car_count++;
 			tail_val++;
 			car_counter++;
 			//setViState(id, MOVE);
@@ -188,6 +240,8 @@ void *outValet(void *arg) {
 					}
 					tail_val--;
 					car_counter--;
+					sum_car_parking += (car->ltm - car->ptm);
+					car_parking_count++;
 					sem_post(&inVal_parking_sem);
 					//Sleeping after unparking a car
 					sleep(1);
@@ -204,6 +258,8 @@ void *outValet(void *arg) {
 }
 
 void *monitor(void *arg) {
+
+	//updateStats()
 	return NULL;
 }
 int main(int argc, char *argv[]) {
@@ -212,6 +268,9 @@ int main(int argc, char *argv[]) {
 
 	//Control c signal handle function
 	signal(SIGINT, ctrlCHandle);
+
+	time(&start_simulation);
+
 	//Command line arguments
 	if ( argc > 1) {
 		psize = atoi(argv[1]);
@@ -251,13 +310,12 @@ int main(int argc, char *argv[]) {
 
 	//Initialize the car park
 	p = (Car**)malloc(psize * sizeof(Car*));
+	for ( int i =- 0 ; i < psize ; i++ ) {
+		p[i] = NULL;
+	}
 
 	//Initialize the car queue
 	Qinit(qsize);
-
-	//Initializing the car display
-	//G2DInit(p, psize, inval, outval, lock);
-	//show();
 
 	for ( int i = 0 ; i < inval ; i++ ) {
 		printf("[MAIN]:InValet thread %d created\n", i);
@@ -270,6 +328,10 @@ int main(int argc, char *argv[]) {
 		outValsID[i] = i + 1;
 		pthread_create(&outValThreads[i], NULL, outValet,&outValsID[i]);
 	}
+
+	//Initializing the car display
+	G2DInit(p, psize, inval, outval, lock);
+	show();
 
 
 	//Infinite main thread loop
