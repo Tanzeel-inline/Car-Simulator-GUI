@@ -19,11 +19,19 @@ int occupied_slots = 0;
 
 //Deadlock and starvation operations
 pthread_mutex_t queue_opr_mutex;
+pthread_mutex_t parking_opr_mutex;
 sem_t inVal_sem;
 sem_t outVal_sem;
+sem_t inVal_parking_sem;
 
 //Queue initialization
 Queue q;
+
+//CAR PARKING INITIALIATION
+Car **p;
+int car_counter = 0;
+int head_val = 0;
+int tail_val = 0;
 
 void Car_Init(Car *p) {
 	p->cid = car_id++;
@@ -44,10 +52,40 @@ void ctrlCHandle(int sig) {
 	exit(0);
 }
 void *inValet(void *arg) {
+	//One will wait for queue addition
+	sem_wait(&inVal_sem);
+	//One will wait for parking empty space
+	sem_wait(&inVal_parking_sem);
+	//
+	pthread_mutex_lock(&queue_opr_mutex);
+	if ( QisEmpty() ) {
+		//Since, we have no car to park
+		sem_post(&inVal_parking_sem);
+	}
+	else {
+		//Pick the car, wait for .2 seconds
+		Car *holder = Qserve();
+		//sleep(0.2);
+		//Send the car to parking lot
+		p[head_val++] = holder;
+		//Reset the counter if it's at the end
+		if ( head_val >= psize ) {
+			head_val = 0;
+		}
+		car_counter++;
+	}
+	
+	pthread_mutex_unlock(&queue_opr_mutex);
 	return NULL;
 }
 
 void *outValet(void *arg) {
+
+	sem_wait(&outVal_sem);
+
+	pthread_mutex_lock(&parking_opr_mutex);
+
+	pthread_mutex_unlock(&parking_opr_mutex);
 	return NULL;
 }
 
@@ -80,11 +118,13 @@ int main(int argc, char *argv[]) {
 	//Locks initialization
 	pthread_mutex_init(&lock, NULL);
 	pthread_mutex_init(&queue_opr_mutex, NULL);
+	pthread_mutex_init(&parking_opr_mutex, NULL);
 	sem_init(&inVal_sem, 0, 0);
 	sem_init(&outVal_sem, 0, 0);
+	sem_init(&inVal_parking_sem, 0, psize);
 
 	//Initialize the car park
-	Car **p = (Car**)malloc(psize * sizeof(Car*));
+	p = (Car**)malloc(psize * sizeof(Car*));
 
 
 	// for ( int i = 0 ; i < psize; i++ ) {
@@ -131,6 +171,8 @@ int main(int argc, char *argv[]) {
 		}
 		refused_cars += (carsToSpawn - i);
 
+
+		//This is useless code
 		while ( occupied_slots < psize && !QisEmpty() ) {
 			Car *car = Qserve();
 			car->ptm = timer;
@@ -139,6 +181,11 @@ int main(int argc, char *argv[]) {
 			occupied_slots++;
 			show();
 		}
+
+		// pthread_mutex_lock(&parking_opr_mutex);
+		
+		// for ( )
+		// pthread_mutex_unlock(&parking_opr_mutex);
 		//Sleep for 1 second
 		sleep(1);
 		//Our timer
